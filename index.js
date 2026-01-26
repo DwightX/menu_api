@@ -273,20 +273,30 @@ app.get("/business/:id/location", async (req, res) => {
 });
 
 app.get("/business/:id/status", async (req, res) => {
+  const businessId = req.params.id;
+
   try {
-    const businessId = req.params.id;
     const result = await pool.query(
       `SELECT last_synced_at, last_sheet
        FROM sync_status
        WHERE business_id = $1`,
       [businessId]
     );
-    res.json({ business_id: businessId, status: result.rows[0] || null });
+
+    res.json({
+      business_id: businessId,
+      status: result.rows[0] || null
+    });
   } catch (err) {
+    // TEMP: expose details so we can fix in one shot
     console.error("❌ GET status failed:", err);
-    res.status(500).json({ error: "Failed to load status" });
+    res.status(500).json({
+      error: "Failed to load status",
+      details: err?.message || String(err)
+    });
   }
 });
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
