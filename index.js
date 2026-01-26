@@ -112,8 +112,13 @@ app.get("/debug/auth", (req, res) => {
 });
 
 // --- Sync endpoint ---
-app.post("/sync", async (req, res) => {
-  if (!requireSyncKey(req, res)) return;
+app.post("/sync", (req, res) => {
+  // auth check
+  const incomingKey = String(req.headers["x-sync-key"] || "").trim();
+  const expectedKey = String(process.env.SYNC_KEY || "").trim();
+
+  if (!expectedKey) return res.status(500).json({ error: "Server missing SYNC_KEY" });
+  if (incomingKey !== expectedKey) return res.status(401).json({ error: "Unauthorized" });
 
   const { business_id, sheet, values, timestamp } = req.body;
 
@@ -121,33 +126,35 @@ app.post("/sync", async (req, res) => {
     return res.status(400).json({ error: "Invalid payload" });
   }
 
-  try {
-    if (sheet === "menu") {
-      await syncMenu(business_id, values);
-    } else if (sheet === "hours") {
-      await syncHours(business_id, values);
-    } else if (sheet === "location") {
-      await syncLocation(business_id, values);
-    } else {
-      return res.status(400).json({ error: "Unknown sheet" });
+  // ✅ Respond immediately so Apps Script never hangs
+  res.status(200).json({ status: "accepted" });
+
+  // ✅ Do the work after responding (fire-and-forget)
+  (async () => {
+    try {
+      if (sheet === "menu") await syncMenu(business_id, values);
+      else if (sheet === "hours") await syncHours(business_id, values);
+      else if (sheet === "location") await syncLocation(business_id, values);
+      else {
+        console.log("❌ Unknown sheet:", sheet);
+        return;
+      }
+
+      await pool.query(
+        `INSERT INTO sync_status (business_id, last_synced_at, last_sheet)
+         VALUES ($1, NOW(), $2)
+         ON CONFLICT (business_id)
+         DO UPDATE SET last_synced_at = NOW(), last_sheet = EXCLUDED.last_sheet`,
+        [business_id, sheet]
+      );
+
+      console.log(`✅ Async sync complete: ${sheet} for ${business_id} @ ${timestamp}`);
+    } catch (err) {
+      console.error("❌ Async sync failed:", err);
     }
-
-    // last updated stamp
-    await pool.query(
-      `INSERT INTO sync_status (business_id, last_synced_at, last_sheet)
-       VALUES ($1, NOW(), $2)
-       ON CONFLICT (business_id)
-       DO UPDATE SET last_synced_at = NOW(), last_sheet = EXCLUDED.last_sheet`,
-      [business_id, sheet]
-    );
-
-    console.log(`✅ Synced ${sheet} for ${business_id} @ ${timestamp}`);
-    return res.json({ status: "ok" });
-  } catch (err) {
-    console.error("❌ Sync failed:", err);
-    return res.status(500).json({ error: "Sync failed" });
-  }
+  })();
 });
+
 
 // --- DB writers ---
 async function syncMenu(businessId, values) {
