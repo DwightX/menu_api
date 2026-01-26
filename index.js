@@ -1,37 +1,78 @@
-// Load env FIRST (preload style)
 import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
 
-// ✅ IMPORTANT: dynamic import AFTER dotenv is loaded
+// dynamic import so env is loaded first
 const { pool } = await import("./db.js");
-
-pool.query("select now()")
-  .then(res => console.log("DB connected at:", res.rows[0].now))
-  .catch(err => console.error("DB connection failed:", err));
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health check
+// --- Helpers ---
+function getExpectedKey() {
+  // trim to avoid invisible whitespace issues in Render env vars
+  return (process.env.SYNC_KEY || "").trim();
+}
+
+function getIncomingKey(req) {
+  // handle possible header variants safely + trim
+  const raw =
+    req.headers["x-sync-key"] ||
+    req.headers["X-Sync-Key"] ||
+    req.get?.("x-sync-key") ||
+    "";
+  return String(raw).trim();
+}
+
+function requireSyncKey(req, res) {
+  const expected = getExpectedKey();
+  const incoming = getIncomingKey(req);
+
+  if (!expected) {
+    // server misconfigured
+    res.status(500).json({ error: "Server missing SYNC_KEY env var" });
+    return false;
+  }
+
+  if (incoming !== expected) {
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
+  }
+
+  return true;
+}
+
+// Health
 app.get("/", (req, res) => {
-  res.send("Taco Sync API is running 🌮");
+  res.send("Menu API is running 🌮");
 });
 
-// Sync endpoint (Google Sheets hits this)
+/**
+ * ✅ One-shot confirmation endpoint
+ * - Doesn’t reveal the secret
+ * - Confirms env var exists + lengths match after trimming
+ * - Confirms header you sent is recognized
+ *
+ * Remove after you’re done verifying.
+ */
+app.get("/debug/auth", (req, res) => {
+  const expected = getExpectedKey();
+  const incoming = getIncomingKey(req);
+
+  res.json({
+    ok: incoming === expected,
+    expected_set: !!expected,
+    expected_len: expected.length,
+    incoming_present: !!incoming,
+    incoming_len: incoming.length,
+  });
+});
+
+// --- Sync endpoint ---
 app.post("/sync", async (req, res) => {
-
-      const incomingKey = req.headers["x-sync-key"];
-
-  console.log("🔥 HIT /sync");
-  console.log("incoming x-sync-key:", incomingKey);
-  console.log("env SYNC_KEY set:", !!process.env.SYNC_KEY);
-  
-  if (incomingKey !== process.env.SYNC_KEY) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  if (!requireSyncKey(req, res)) return;
 
   const { business_id, sheet, values, timestamp } = req.body;
 
@@ -50,7 +91,7 @@ app.post("/sync", async (req, res) => {
       return res.status(400).json({ error: "Unknown sheet" });
     }
 
-    // ✅ NEW: update "last updated" status after successful sync
+    // last updated stamp
     await pool.query(
       `INSERT INTO sync_status (business_id, last_synced_at, last_sheet)
        VALUES ($1, NOW(), $2)
@@ -67,16 +108,15 @@ app.post("/sync", async (req, res) => {
   }
 });
 
+// --- DB writers ---
 async function syncMenu(businessId, values) {
-  const rows = values.slice(1); // skip header
-
+  const rows = values.slice(1);
   await pool.query("DELETE FROM menu_items WHERE business_id = $1", [businessId]);
 
   for (const r of rows) {
     if (!r || r.length < 5) continue;
 
     const [id, name, price, description, active] = r;
-
     if (id === "" || name === "" || price === "") continue;
 
     await pool.query(
@@ -88,15 +128,14 @@ async function syncMenu(businessId, values) {
         String(name),
         Number(price),
         description ? String(description) : null,
-        active === true || String(active).toUpperCase() === "TRUE"
+        active === true || String(active).toUpperCase() === "TRUE",
       ]
     );
   }
 }
 
 async function syncHours(businessId, values) {
-  const rows = values.slice(1); // skip header
-
+  const rows = values.slice(1);
   await pool.query("DELETE FROM hours WHERE business_id = $1", [businessId]);
 
   for (const r of rows) {
@@ -114,7 +153,7 @@ async function syncHours(businessId, values) {
 }
 
 async function syncLocation(businessId, values) {
-  const rows = values.slice(1); // skip header
+  const rows = values.slice(1);
 
   let current_spot = null;
   let note = null;
@@ -135,13 +174,10 @@ async function syncLocation(businessId, values) {
   );
 }
 
-const PORT = process.env.PORT || 3000;
-
-// Read: Menu
+// --- Read endpoints ---
 app.get("/business/:id/menu", async (req, res) => {
-  const businessId = req.params.id;
-
   try {
+    const businessId = req.params.id;
     const result = await pool.query(
       `SELECT id, name, price, description, active
        FROM menu_items
@@ -149,7 +185,6 @@ app.get("/business/:id/menu", async (req, res) => {
        ORDER BY id ASC`,
       [businessId]
     );
-
     res.json({ business_id: businessId, menu: result.rows });
   } catch (err) {
     console.error("❌ GET menu failed:", err);
@@ -157,29 +192,15 @@ app.get("/business/:id/menu", async (req, res) => {
   }
 });
 
-// Read: Hours
 app.get("/business/:id/hours", async (req, res) => {
-  const businessId = req.params.id;
-
   try {
+    const businessId = req.params.id;
     const result = await pool.query(
       `SELECT day, open, close
        FROM hours
-       WHERE business_id = $1
-       ORDER BY
-         CASE day
-           WHEN 'Monday' THEN 1
-           WHEN 'Tuesday' THEN 2
-           WHEN 'Wednesday' THEN 3
-           WHEN 'Thursday' THEN 4
-           WHEN 'Friday' THEN 5
-           WHEN 'Saturday' THEN 6
-           WHEN 'Sunday' THEN 7
-           ELSE 8
-         END`,
+       WHERE business_id = $1`,
       [businessId]
     );
-
     res.json({ business_id: businessId, hours: result.rows });
   } catch (err) {
     console.error("❌ GET hours failed:", err);
@@ -187,50 +208,38 @@ app.get("/business/:id/hours", async (req, res) => {
   }
 });
 
-// Read: Location
 app.get("/business/:id/location", async (req, res) => {
-  const businessId = req.params.id;
-
   try {
+    const businessId = req.params.id;
     const result = await pool.query(
       `SELECT current_spot, note
        FROM location
        WHERE business_id = $1`,
       [businessId]
     );
-
-    res.json({
-      business_id: businessId,
-      location: result.rows[0] || { current_spot: null, note: null }
-    });
+    res.json({ business_id: businessId, location: result.rows[0] || { current_spot: null, note: null } });
   } catch (err) {
     console.error("❌ GET location failed:", err);
     res.status(500).json({ error: "Failed to load location" });
   }
 });
 
-// ✅ NEW: Read "Last updated" status
 app.get("/business/:id/status", async (req, res) => {
-  const businessId = req.params.id;
-
   try {
+    const businessId = req.params.id;
     const result = await pool.query(
       `SELECT last_synced_at, last_sheet
        FROM sync_status
        WHERE business_id = $1`,
       [businessId]
     );
-
-    res.json({
-      business_id: businessId,
-      status: result.rows[0] || null
-    });
+    res.json({ business_id: businessId, status: result.rows[0] || null });
   } catch (err) {
     console.error("❌ GET status failed:", err);
     res.status(500).json({ error: "Failed to load status" });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+ 
