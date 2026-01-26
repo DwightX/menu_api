@@ -77,7 +77,9 @@ function testRenderSync() {
     throw err;
   }
 }
-
+app.get("/ping", (req, res) => {
+  res.status(200).send("pong");
+});
 
 // Health
 app.get("/", (req, res) => {
