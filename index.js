@@ -22,8 +22,13 @@ app.get("/", (req, res) => {
 
 // Sync endpoint (Google Sheets hits this)
 app.post("/sync", async (req, res) => {
-  const incomingKey = req.headers["x-sync-key"];
 
+      const incomingKey = req.headers["x-sync-key"];
+
+  console.log("🔥 HIT /sync");
+  console.log("incoming x-sync-key:", incomingKey);
+  console.log("env SYNC_KEY set:", !!process.env.SYNC_KEY);
+  
   if (incomingKey !== process.env.SYNC_KEY) {
     return res.status(401).json({ error: "Unauthorized" });
   }
