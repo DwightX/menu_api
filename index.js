@@ -77,6 +77,10 @@ function testRenderSync() {
     throw err;
   }
 }
+app.post("/test-post", (req, res) => {
+  res.json({ ok: true, received: req.body || null });
+});
+
 app.get("/ping", (req, res) => {
   res.status(200).send("pong");
 });
