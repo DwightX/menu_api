@@ -44,6 +44,41 @@ function requireSyncKey(req, res) {
   return true;
 }
 
+
+function testRenderSync() {
+  const url = "https://menu-api-u20i.onrender.com/sync";
+
+  const payload = {
+    business_id: "taco-truck-001",
+    sheet: "menu",
+    values: [["id","name","price","description","active"],[1,"Manual Test",9.99,"",true]],
+    timestamp: new Date().toISOString()
+  };
+
+  Logger.log("START testRenderSync at " + new Date().toISOString());
+
+  try {
+    const resp = UrlFetchApp.fetch(url, {
+      method: "post",
+      contentType: "application/json",
+      headers: { "x-sync-key": "TACO_SECRET" },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+      followRedirects: true,
+      timeout: 30, // ✅ seconds
+    });
+
+    Logger.log("DONE fetch at " + new Date().toISOString());
+    Logger.log("CODE: " + resp.getResponseCode());
+    Logger.log("BODY: " + resp.getContentText());
+  } catch (err) {
+    Logger.log("FETCH ERROR at " + new Date().toISOString());
+    Logger.log("ERROR: " + err);
+    throw err;
+  }
+}
+
+
 // Health
 app.get("/", (req, res) => {
   res.send("Menu API is running 🌮");
