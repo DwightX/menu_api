@@ -221,6 +221,14 @@ async function syncLocation(businessId, values) {
     [businessId, current_spot, note]
   );
 }
+app.get("/db-health", async (req, res) => {
+  try {
+    const r = await pool.query("select now() as now");
+    res.json({ ok: true, now: r.rows[0].now });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || String(err) });
+  }
+});
 
 // --- Read endpoints ---
 app.get("/business/:id/menu", async (req, res) => {
