@@ -115,7 +115,8 @@ async function syncMenu(businessId, values) {
 }
 
 async function syncHours(businessId, values) {
-  const rows = values.slice(1);
+  const rows = values.slice(1); // skip header
+
   await pool.query("DELETE FROM hours WHERE business_id = $1", [businessId]);
 
   for (const r of rows) {
@@ -127,9 +128,30 @@ async function syncHours(businessId, values) {
     await pool.query(
       `INSERT INTO hours (business_id, day, open, close)
        VALUES ($1, $2, $3, $4)`,
-      [businessId, String(day), open || null, close || null]
+      [businessId, String(day).trim(), normalizeTime(open), normalizeTime(close)]
     );
   }
+}
+
+// Converts Google Sheets values into "HH:MM" (or null)
+function normalizeTime(v) {
+  if (v == null || v === "") return null;
+
+  // If Apps Script time cells arrived as Date objects, they often serialize weird.
+  // But sometimes they come through as a string already.
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    const hh = String(v.getHours()).padStart(2, "0");
+    const mm = String(v.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+
+  const s = String(v).trim();
+
+  // Accept "11:00" or "11:00:00"
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) return s.slice(0, 5);
+
+  // fallback: store whatever it is (or change this to null if you prefer strict)
+  return s;
 }
 
 async function syncLocation(businessId, values) {
