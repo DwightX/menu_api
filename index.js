@@ -128,31 +128,45 @@ async function syncHours(businessId, values) {
     await pool.query(
       `INSERT INTO hours (business_id, day, open, close)
        VALUES ($1, $2, $3, $4)`,
-      [businessId, String(day).trim(), normalizeTime(open), normalizeTime(close)]
+      [businessId, String(day).trim(), normalizeSheetTime(open), normalizeSheetTime(close)]
     );
   }
 }
 
-// Converts Google Sheets values into "HH:MM" (or null)
-function normalizeTime(v) {
+/**
+ * Converts Sheets time values into "HH:MM" (or null).
+ * Handles:
+ * - "1899-12-30T05:00:00.000Z" (your current case)
+ * - real Date objects
+ * - "11:00" / "11:00:00"
+ */
+function normalizeSheetTime(v) {
   if (v == null || v === "") return null;
 
-  // If Apps Script time cells arrived as Date objects, they often serialize weird.
-  // But sometimes they come through as a string already.
+  // If it's already a Date object
   if (Object.prototype.toString.call(v) === "[object Date]") {
     const hh = String(v.getHours()).padStart(2, "0");
     const mm = String(v.getMinutes()).padStart(2, "0");
     return `${hh}:${mm}`;
   }
 
+  // If it's the ISO string like "1899-12-30T05:00:00.000Z"
   const s = String(v).trim();
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    // Use UTC because your string ends with Z
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mm = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
 
-  // Accept "11:00" or "11:00:00"
+  // If it's "11:00" or "11:00:00"
   if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) return s.slice(0, 5);
 
-  // fallback: store whatever it is (or change this to null if you prefer strict)
-  return s;
+  // fallback
+  return null;
 }
+
 
 async function syncLocation(businessId, values) {
   // values[0] = headers row, values[1] = first data row
